@@ -1,5 +1,3 @@
-declare const Deno: any;
-
 const PSK = "e2a49b3e-6730-479d-b145-fa1fddc11efc";
 
 const STRIP_HEADERS = new Set([
@@ -42,7 +40,18 @@ function sanitizeHeaders(h: unknown): Record<string, string> {
   return out;
 }
 
-Deno.serve(async (req: Request): Promise<Response> => {
+export default async function (req: Request): Promise<Response> {
+  if (PSK === "CHANGE_ME_TO_A_STRONG_SECRET") {
+    return Response.json(
+      {
+        e:
+          "exit_node misconfigured: PSK is still the placeholder. Set " +
+          "a strong secret in the source before deploying.",
+      },
+      { status: 503 },
+    );
+  }
+
   try {
     if (req.method !== "POST") {
       return Response.json({ e: "method_not_allowed" }, { status: 405 });
@@ -53,27 +62,40 @@ Deno.serve(async (req: Request): Promise<Response> => {
       return Response.json({ e: "bad_json" }, { status: 400 });
     }
 
-    if (!PSK) {
-      return Response.json({ e: "server_psk_missing" }, { status: 500 });
-    }
-
     const k = String((body as any).k ?? "");
     const u = String((body as any).u ?? "");
     const m = String((body as any).m ?? "GET").toUpperCase();
     const h = sanitizeHeaders((body as any).h);
     const b64 = (body as any).b;
 
-    if (k !== PSK) return Response.json({ e: "unauthorized" }, { status: 401 });
-    if (!/^https?:\/\//i.test(u)) return Response.json({ e: "bad_url" }, { status: 400 });
+    if (k !== PSK) {
+      return Response.json({ e: "unauthorized" }, { status: 401 });
+    }
+    if (!/^https?:\/\//i.test(u)) {
+      return Response.json({ e: "bad url" }, { status: 400 });
+    }
+
+    try {
+      const reqUrl = new URL(req.url);
+      const dstUrl = new URL(u);
+      if (
+        reqUrl.host === dstUrl.host &&
+        reqUrl.protocol === dstUrl.protocol
+      ) {
+        return Response.json({ e: "exit-node loop refused" }, { status: 400 });
+      }
+    } catch {
+    }
 
     let payload: Uint8Array | undefined;
-    if (typeof b64 === "string" && b64.length > 0) payload = decodeBase64ToBytes(b64);
-    const requestBody = payload ? Uint8Array.from(payload) : undefined;
+    if (typeof b64 === "string" && b64.length > 0) {
+      payload = decodeBase64ToBytes(b64);
+    }
 
     const resp = await fetch(u, {
       method: m,
       headers: h,
-      body: requestBody as unknown as BodyInit,
+      body: payload,
       redirect: "manual",
     });
 
@@ -92,4 +114,4 @@ Deno.serve(async (req: Request): Promise<Response> => {
     const message = err instanceof Error ? err.message : String(err);
     return Response.json({ e: message }, { status: 500 });
   }
-});
+}
